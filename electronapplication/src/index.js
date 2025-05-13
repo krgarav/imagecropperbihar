@@ -29,9 +29,10 @@ function createWindow() {
     },
   });
   mainWindow.setMenu(null);
-  // mainWindow.loadURL(`http://localhost:${port}`);
-  mainWindow.loadURL(`http://localhost:${5173}`);
-  mainWindow.webContents.openDevTools();
+  mainWindow.loadURL(`http://localhost:${port}`);
+  // mainWindow.loadURL(`http://localhost:${5173}`);
+  // mainWindow.loadFile(path.join(__dirname, "../dist/index.html"));
+  // mainWindow.webContents.openDevTools();
 }
 
 // Start Express server when Electro
