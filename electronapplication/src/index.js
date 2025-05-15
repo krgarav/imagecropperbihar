@@ -215,6 +215,46 @@ ipcMain.handle(
   }
 );
 
+ipcMain.handle(
+  "check-single-image-exists",
+  async (event, { dirName, folderName, firstImageName }) => {
+    try {
+      if (!folderName || !firstImageName) {
+        throw new Error("Missing folder name or image names.");
+      }
+      const targetDir = dirName;
+      const firstImagePath = path.join(targetDir, "cropped", firstImageName);
+      console.log(firstImagePath);
+      // Check if target folder exists
+      if (!fs.existsSync(targetDir)) {
+        return {
+          exists: false,
+          error: `Folder "${folderName}" does not exist in ${dirName}.`,
+        };
+      }
+
+      // Check if both images exist
+      const firstExists = fs.existsSync(firstImagePath);
+
+      if (firstExists) {
+        return {
+          exists: true,
+          paths: [firstImagePath],
+        };
+      } else {
+        return {
+          exists: false,
+        };
+      }
+    } catch (error) {
+      console.error("Error checking images:", error);
+      return {
+        exists: false,
+        error: error.message,
+      };
+    }
+  }
+);
 ipcMain.handle("select-directory", async () => {
   try {
     const result = await dialog.showOpenDialog({
@@ -322,7 +362,7 @@ ipcMain.handle("convert-dir-images-to-pdf", async (event, folderName) => {
   }
 });
 
-ipcMain.handle("get-image-count", async (event, dirName) => {
+ipcMain.handle("get-image-count", async (event, {dirName, singleDir}) => {
   try {
     if (!dirName) {
       throw new Error("dirName name not provided.");
@@ -339,7 +379,10 @@ ipcMain.handle("get-image-count", async (event, dirName) => {
     const imageFiles = files.filter((file) =>
       imageExtensions.includes(path.extname(file).toLowerCase())
     );
-
+    console.log(singleDir);
+    if (singleDir === "single") {
+      return { success: true, count: imageFiles.length };
+    }
     return {
       success: true,
       count: Math.floor(imageFiles.length / 2),

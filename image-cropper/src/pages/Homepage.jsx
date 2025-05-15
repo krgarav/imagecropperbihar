@@ -56,6 +56,7 @@ const Homepage = () => {
   const [imgSrc, setImageSrc] = useState(null);
   const [open, setOpen] = useState(false);
   const [enteredImageName, setEnteredImageName] = useState(null);
+  const [singleDir, setSingleDir] = useState(null);
   const toastIdRef = useRef(null);
   const hasInsertedImage = useRef(false);
   const theme = createTheme({
@@ -70,10 +71,10 @@ const Homepage = () => {
   });
 
   useEffect(() => {
-    const getImageCount = async (folderName) => {
+    const getImageCount = async (folderName, singleDir) => {
       const result = await window.electron.ipcRenderer.invoke(
         "get-image-count",
-        folderName
+        { dirName: folderName, singleDir }
       );
 
       if (result.success) {
@@ -84,10 +85,11 @@ const Homepage = () => {
       }
     };
 
-    if (selectedDir) {
-      getImageCount(selectedDir);
+    if (selectedDir && singleDir) {
+      console.log(singleDir);
+      getImageCount(selectedDir, singleDir);
     }
-  }, [selectedDir]);
+  }, [selectedDir, singleDir]);
   useEffect(() => {
     const name = localStorage.getItem("currentDir");
     if (name) {
@@ -257,17 +259,30 @@ const Homepage = () => {
     return name.slice(0, dotIndex) + insert + name.slice(dotIndex);
   };
   const checkCroppedStatus = async (imageName, folderName) => {
-    const result = await window.electron.ipcRenderer.invoke(
-      "check-image-exists",
-      {
-        dirName: selectedDir,
-        folderName: `${folderName}`,
-        firstImageName: `${imageName}`,
-        secondImageName: `${insertBeforeExtension(imageName, "_1")}`,
-      }
-    );
-    console.log(result);
-    setIsCropped(result.exists);
+    if (singleDir !== "single") {
+      const result = await window.electron.ipcRenderer.invoke(
+        "check-image-exists",
+        {
+          dirName: selectedDir,
+          folderName: `${folderName}`,
+          firstImageName: `${imageName}`,
+          secondImageName: `${insertBeforeExtension(imageName, "_1")}`,
+        }
+      );
+      console.log(result);
+      setIsCropped(result.exists);
+    } else {
+      const result = await window.electron.ipcRenderer.invoke(
+        "check-single-image-exists",
+        {
+          dirName: selectedDir,
+          folderName: `${folderName}`,
+          firstImageName: `${imageName}`,
+        }
+      );
+      console.log(result);
+      setIsCropped(result.exists);
+    }
   };
 
   const prevHandler = async () => {
@@ -358,6 +373,56 @@ const Homepage = () => {
     }
   };
 
+  const singleSaveHandler = async () => {
+    setLoading(true);
+    if (!folderName) {
+      toast.error("Please enter folder name!");
+      setLoading(false);
+      return;
+    }
+    const imageName = `${imgCtx.selectedImage[currIndex]}`;
+    const cropper = cropperRef.current?.cropper;
+    const croppedCanvas = cropper?.getCroppedCanvas();
+
+    if (!croppedCanvas) {
+      toast.error("No cropped area found");
+      setLoading(false);
+      return;
+    }
+
+    const filename = imageName || `cropped-${Date.now()}.jpg`;
+
+    try {
+      const blob = await new Promise((resolve) => {
+        croppedCanvas.toBlob(resolve, "image/png");
+      });
+
+      const arrayBuffer = await blob.arrayBuffer();
+      console.log(selectedDir, imageName);
+      // Send buffer and metadata to main process
+      const result = await window.electron.ipcRenderer.invoke(
+        "save-cropped-img",
+        {
+          buffer: Array.from(new Uint8Array(arrayBuffer)), // serialize
+          baseDir: selectedDir,
+          imageName,
+        }
+      );
+
+      if (result.success) {
+        toast.success(`${filename} saved in ${folderName}`);
+        nextHandler();
+      } else {
+        throw new Error(result.error);
+      }
+    } catch (err) {
+      toast.error("Image could not be saved");
+      console.error("IPC error:", err);
+    } finally {
+      setLoading(false);
+      handleClose();
+    }
+  };
   const clearHandler = async () => {
     if (!folderName) {
       toast.error("No folder name provided.");
@@ -435,7 +500,7 @@ const Homepage = () => {
     setFolderName(event.target.value);
   };
 
-  const handleDirectorySelect = async () => {
+  const handleDirectorySelect = async (str) => {
     try {
       // Select the directory
       const result = await window.electron.ipcRenderer.invoke(
@@ -443,6 +508,7 @@ const Homepage = () => {
       );
 
       if (result.success) {
+        setSingleDir(str);
         setSelectedDir(result.directory); // Set the selected directory
         // Now, get the image names from the selected directory
         await fetchImageNames(result.directory);
@@ -512,6 +578,7 @@ const Homepage = () => {
           {imgSelected.length === 0 && (
             <div className={classes.mainbox}>
               <div className={classes.continueBox}>
+                <h1>Single Page Cropping</h1>
                 <h2 className={classes.continueText}>
                   📂 Choose Images Directory
                 </h2>
@@ -523,7 +590,30 @@ const Homepage = () => {
                   ) : (
                     <button
                       className={classes.selectButton}
-                      onClick={handleDirectorySelect}
+                      onClick={() => handleDirectorySelect("single")}
+                    >
+                      Select Directory
+                    </button>
+                  )}
+                  {dirError && (
+                    <p className={classes.errorMessage}>{dirError}</p>
+                  )}
+                </div>
+              </div>
+              <div className={classes.continueBox}>
+                <h1>Double Side Cropping</h1>
+                <h2 className={classes.continueText}>
+                  📂 Choose Images Directory
+                </h2>
+                <div className={classes.directorySelector}>
+                  {selectedDir ? (
+                    <div>
+                      <p>Selected Directory: {selectedDir}</p>
+                    </div>
+                  ) : (
+                    <button
+                      className={classes.selectButton}
+                      onClick={() => handleDirectorySelect("double")}
                     >
                       Select Directory
                     </button>
@@ -642,7 +732,27 @@ const Homepage = () => {
                       </Button>
                     </Grid>
                     <Grid item>
-                      {loading ? (
+                      {singleDir !== "single" ? (
+                        loading ? (
+                          <LoadingButton
+                            loading
+                            loadingPosition="start"
+                            startIcon={<SaveIcon />}
+                            variant="outlined"
+                          >
+                            SAVING
+                          </LoadingButton>
+                        ) : (
+                          <Button
+                            variant="outlined"
+                            color="success"
+                            startIcon={<SaveIcon />}
+                            onClick={handleOpen}
+                          >
+                            SAVE
+                          </Button>
+                        )
+                      ) : loading ? (
                         <LoadingButton
                           loading
                           loadingPosition="start"
@@ -656,7 +766,7 @@ const Homepage = () => {
                           variant="outlined"
                           color="success"
                           startIcon={<SaveIcon />}
-                          onClick={handleOpen}
+                          onClick={singleSaveHandler}
                         >
                           SAVE
                         </Button>
