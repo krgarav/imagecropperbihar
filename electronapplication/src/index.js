@@ -136,30 +136,69 @@ ipcMain.handle("process-pdf", async (event, { buffer, name }) => {
 
 ipcMain.handle(
   "save-cropped-img",
-  async (event, { buffer, baseDir, imageName }) => {
+  async (event, { buffer, baseDir, imageName, currIndex }) => {
     try {
-      console.log(baseDir, imageName);
-      if (!buffer) {
-        throw new Error("Missing image buffer or folder name.");
-      }
-      const croppedDir = path.join(baseDir, "cropped"); // Create this if needed
+      console.log(baseDir, imageName, currIndex);
 
-      // ✅ Check base folder exists
+      if (!buffer || !baseDir || !imageName) {
+        throw new Error("Missing required parameters.");
+      }
+
+      // ✅ Ensure baseDir exists
       if (!fs.existsSync(baseDir)) {
         return {
           success: false,
-          error: `Folder  `,
+          error: `Base folder does not exist: ${baseDir}`,
         };
       }
 
+      const croppedDir = path.join(baseDir, "cropped");
+
       // ✅ Create "cropped" folder if it doesn't exist
       if (!fs.existsSync(croppedDir)) {
-        fs.mkdirSync(croppedDir);
+        fs.mkdirSync(croppedDir, { recursive: true });
       }
 
-      const filePath = path.join(croppedDir, imageName);
+      // ✅ Ensure config.json exists and is valid
+      const txtPath = path.join(croppedDir, "config.json");
+      if (!fs.existsSync(txtPath)) {
+        const defaultConfig = {
+          images: [],
+          currentIndex: 0,
+        };
+        fs.writeFileSync(txtPath, JSON.stringify(defaultConfig, null, 2));
+      }
 
+      // ✅ Save the image
+      const filePath = path.join(croppedDir, imageName);
       fs.writeFileSync(filePath, Buffer.from(buffer));
+
+      // ✅ Read and validate existing config
+      let config;
+      try {
+        const contents = fs.readFileSync(txtPath, "utf-8");
+        config = JSON.parse(contents);
+        if (!Array.isArray(config.images)) {
+          config.images = [];
+        }
+        if (typeof config.currentIndex !== "number") {
+          config.currentIndex = 0;
+        }
+      } catch (err) {
+        console.warn("Corrupted config.json, resetting.");
+        config = { images: [], currentIndex: 0 };
+      }
+
+      // ✅ Add image if not already present
+      if (!config.images.includes(imageName)) {
+        config.images.push(imageName);
+      }
+
+      // ✅ Update current index
+      config.currentIndex = currIndex ?? 0;
+
+      // ✅ Write updated config back
+      fs.writeFileSync(txtPath, JSON.stringify(config, null, 2));
 
       return { success: true, path: filePath };
     } catch (error) {
@@ -255,6 +294,50 @@ ipcMain.handle(
     }
   }
 );
+
+ipcMain.handle("check-all-cropped-exists", async (event, { dirName }) => {
+  try {
+    if (!dirName) {
+      throw new Error("Missing folder name or image names.");
+    }
+    const targetDir = dirName;
+    const imagePath = path.join(targetDir, "cropped");
+
+    // Check if target folder exists
+    if (!fs.existsSync(imagePath)) {
+      return {
+        success: false,
+        error: `Cropped Folder does not exist.`,
+        count: 0,
+      };
+    }
+    // Check if both images exist
+    const firstExists = fs.existsSync(imagePath);
+    const files = fs.readdirSync(imagePath);
+    const imageExtensions = [".jpg", ".jpeg", ".png", ".gif", ".bmp", ".tiff"];
+    const imageFiles = files.filter((file) =>
+      imageExtensions.includes(path.extname(file).toLowerCase())
+    );
+    if (firstExists) {
+      return {
+        success: true,
+        count: imageFiles[imageFiles.length - 1].split(".")[0],
+      };
+    } else {
+      return {
+        success: false,
+        count: 0,
+      };
+    }
+  } catch (error) {
+    console.error("Error checking images:", error);
+    return {
+      exists: false,
+      error: error.message,
+    };
+  }
+});
+
 ipcMain.handle("select-directory", async () => {
   try {
     const result = await dialog.showOpenDialog({
@@ -362,7 +445,7 @@ ipcMain.handle("convert-dir-images-to-pdf", async (event, folderName) => {
   }
 });
 
-ipcMain.handle("get-image-count", async (event, {dirName, singleDir}) => {
+ipcMain.handle("get-image-count", async (event, { dirName, singleDir }) => {
   try {
     if (!dirName) {
       throw new Error("dirName name not provided.");
@@ -409,6 +492,30 @@ ipcMain.handle("get-image-base64", async (event, { dir, imageName }) => {
   }
 });
 
+ipcMain.handle("get-config-file", async (event, { dirName }) => {
+  try {
+    if (!dirName) {
+      throw new Error("dirName name not provided.");
+    }
+
+    const croppedDir = path.join(dirName, "cropped", "config.json");
+
+    if (!fs.existsSync(croppedDir)) {
+      return { success: false, error: "'config.json' file does not exist." };
+    }
+
+    const configContent = fs.readFileSync(croppedDir, "utf-8");
+    const config = JSON.parse(configContent);
+
+    return { success: true, config };
+  } catch (error) {
+    console.error("Error getting config file:", error);
+    return {
+      success: false,
+      error: error.message,
+    };
+  }
+});
 // Helper function to detect image MIME type
 function getMimeType(filePath) {
   const ext = path.extname(filePath).toLowerCase();

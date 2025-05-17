@@ -57,6 +57,7 @@ const Homepage = () => {
   const [open, setOpen] = useState(false);
   const [enteredImageName, setEnteredImageName] = useState(null);
   const [singleDir, setSingleDir] = useState(null);
+  const [imageIndexName, setImageIndexName] = useState(0);
   const toastIdRef = useRef(null);
   const hasInsertedImage = useRef(false);
   const theme = createTheme({
@@ -69,6 +70,48 @@ const Homepage = () => {
       },
     },
   });
+
+  useEffect(() => {
+    const getConfig = async () => {
+      const result = await window.electron.ipcRenderer.invoke(
+        "get-config-file",
+        { dirName: selectedDir }
+      );
+      if (result.success) {
+        const lastIndex = result.config?.currentIndex;
+        if (lastIndex !== undefined) {
+          setCurrIndex(lastIndex);
+        }
+      } else {
+        console.error("Error:", result.error);
+      }
+    };
+    if (singleDir !== "single" && selectedDir) {
+      getConfig();
+    }
+  }, [singleDir, selectedDir]);
+
+  useEffect(() => {
+    const getImageCount = async (selectedDir) => {
+      const result = await window.electron.ipcRenderer.invoke(
+        "check-all-cropped-exists",
+        { dirName: selectedDir }
+      );
+      console.log("Image count:", result);
+      if (result.success) {
+        if (result.count) {
+          setImageIndexName(+result.count);
+        }
+        console.log("Image count:", result.count);
+      } else {
+        console.error("Error:", result.error);
+      }
+    };
+
+    if (selectedDir) {
+      getImageCount(selectedDir);
+    }
+  }, [selectedDir, currIndex]);
 
   useEffect(() => {
     const getImageCount = async (folderName, singleDir) => {
@@ -86,10 +129,10 @@ const Homepage = () => {
     };
 
     if (selectedDir && singleDir) {
-      console.log(singleDir);
       getImageCount(selectedDir, singleDir);
     }
   }, [selectedDir, singleDir]);
+
   useEffect(() => {
     const name = localStorage.getItem("currentDir");
     if (name) {
@@ -549,11 +592,58 @@ const Homepage = () => {
     }
   };
 
+  const save2Handler = async () => {
+    setLoading(true);
+    const imageIdx = Number(imageIndexName) + 1;
+
+    const imageName = `${imageIdx}.jpg`;
+    const cropper = cropperRef.current?.cropper;
+    const croppedCanvas = cropper?.getCroppedCanvas();
+
+    if (!croppedCanvas) {
+      toast.error("No cropped area found");
+      setLoading(false);
+      return;
+    }
+
+    const filename = imageName || `cropped-${Date.now()}.jpg`;
+
+    try {
+      const blob = await new Promise((resolve) => {
+        croppedCanvas.toBlob(resolve, "image/png");
+      });
+
+      const arrayBuffer = await blob.arrayBuffer();
+      // Send buffer and metadata to main process
+      const result = await window.electron.ipcRenderer.invoke(
+        "save-cropped-img",
+        {
+          buffer: Array.from(new Uint8Array(arrayBuffer)), // serialize
+          baseDir: selectedDir,
+          imageName,
+          currIndex: currIndex,
+        }
+      );
+      console.log(result);
+      if (result.success) {
+        toast.success(`${filename} saved in ${folderName}`);
+        setImageIndexName((prev) => +prev + 1);
+        if (imageIndexName % 2 !== 0) {
+          nextHandler();
+        }
+      } else {
+        throw new Error(result.error);
+      }
+    } catch (err) {
+      toast.error("Image could not be saved");
+      console.error("IPC error:", err);
+    } finally {
+      setLoading(false);
+      handleClose();
+    }
+  };
   const handleOpen = () => {
-    const fullName = imgCtx.selectedImage[currIndex];
-    const nameWithoutExt = fullName.replace(/\.[^/.]+$/, ""); // removes extension
-    setEnteredImageName(nameWithoutExt);
-    setOpen(true);
+    save2Handler();
   };
   const handleClose = () => setOpen(false);
   const handleConfirm = () => {
